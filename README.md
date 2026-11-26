@@ -9,27 +9,37 @@
 需要 macOS、Xcode、Flutter（满足 `mobile/pubspec.yaml` 的 Dart SDK 约束）和
 CocoaPods。打开终端运行：
 到mobile
+```sh
 cd mobile
+```
 查看有没有装好flutter
+```sh
 flutter --version
+```
 如果完成，可以查询本地设备，在本地设备中运行
+```sh
 flutter devices
+```
 如果没条件可以跑在谷歌浏览器中
+```sh
 flutter run -d chrome
-
+```
 ## 运行 API 后端
 
 后端需要 Python 依赖、MongoDB 服务；地图和 Bot 功能还需要相应 API 密钥。
 从 `backend/` 目录运行：
 
 创建启动环境，安装库
+```sh
 brew install cmake dlib imagemagick
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
+```
 启动后端
+```sh
 python main.py
-
+```
 先启动 MongoDB，并在 `.env` 中填写需要的密钥。iPhone 真机访问时，后端
 需要监听局域网接口：
 
