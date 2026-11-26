@@ -1,0 +1,30 @@
+fastapi
+uvicorn
+numpy
+pydantic
+Pillow
+face_recognition
+face_recognition_models
+reverse_geocoder
+pillow-heif
+rawpy; sys_platform == 'win32'
+Wand; sys_platform != 'win32'
+python-multipart
+PyInstaller
+setuptools<81
+httpx
+pymongo
+SQLAlchemy
+sqlmodel
+
+# ============================================================================
+# Platform-Specific Dependencies:
+# ============================================================================
+# - rawpy: Used on Windows for RAW image processing (automatic)
+# - Wand: Used on macOS/Linux for RAW image processing (requires ImageMagick)
+#
+# macOS Setup (REQUIRED for Apple Silicon M1/M2/M3):
+#   brew install cmake dlib imagemagick
+#
+# The application will automatically use the correct library based on your OS.
+# ============================================================================
