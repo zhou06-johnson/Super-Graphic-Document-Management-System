@@ -19,6 +19,7 @@ flutter --version
 如果完成，可以查询本地设备，在本地设备中运行
 ```sh
 flutter devices
+flutter run
 ```
 如果没条件可以跑在谷歌浏览器中
 ```sh
