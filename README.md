@@ -6,47 +6,29 @@
 
 ## iOS 模拟器
 
-在 macOS 上也可以从项目根目录一键启动：
-
-```sh
-chmod +x start.sh   # 仅首次需要
-./start.sh
-```
-
-脚本会准备 Python 虚拟环境与 Flutter/iOS 依赖，启动 API，然后运行 Flutter
-应用。首次安装后再次运行会复用本地依赖。支持 `./start.sh mobile` 只运行应用、
-`./start.sh backend` 只运行后端。运行前需安装 Xcode、Flutter、CocoaPods 和
-Python 3；后端功能还需启动 MongoDB。脚本会在首次启动时从示例文件创建
-`backend/.env`，地图及 Bot 功能所需密钥需自行填写。按 Ctrl+C 会停止脚本启动
-的进程。
-
 需要 macOS、Xcode、Flutter（满足 `mobile/pubspec.yaml` 的 Dart SDK 约束）和
 CocoaPods。打开终端运行：
-
-```sh
+到mobile
 cd mobile
-flutter doctor
-flutter pub get
-cd ios && pod install && cd ..
-open ios/Runner.xcworkspace
-```
-
-在 Xcode 选择 iPhone 模拟器并运行；也可以用 `flutter devices` 查看设备后
-执行 `flutter run -d <device-id>`。首次 `flutter pub get` 会重建被原压缩包
-污染的机器专属配置。不要从旧 Windows 构建目录复制生成文件回来。
+查看有没有装好flutter
+flutter --version
+如果完成，可以查询本地设备，在本地设备中运行
+flutter devices
+如果没条件可以跑在谷歌浏览器中
+flutter run -d chrome
 
 ## 运行 API 后端
 
 后端需要 Python 依赖、MongoDB 服务；地图和 Bot 功能还需要相应 API 密钥。
 从 `backend/` 目录运行：
 
-```sh
+创建启动环境，安装库
 brew install cmake dlib imagemagick
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
-cp .env.example .env
-```
+启动后端
+python main.py
 
 先启动 MongoDB，并在 `.env` 中填写需要的密钥。iPhone 真机访问时，后端
 需要监听局域网接口：
