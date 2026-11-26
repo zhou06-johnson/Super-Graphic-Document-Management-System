@@ -1,0 +1,10 @@
+# macOS metadata
+.DS_Store
+
+# Xcode build output and per-user settings
+/ios/build/
+/ios/DerivedData/
+xcuserdata/
+*.xcuserstate
+*.xcarchive
+*.ipa
