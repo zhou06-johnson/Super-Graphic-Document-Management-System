@@ -77,6 +77,7 @@
     fileVideo: $('#file-video'),
     fileAudio: $('#file-audio'),
     filePip: $('#file-pip'),
+    fileSticker: $('#file-sticker'),
   };
 
   const editor = editorLib(el.preview);
@@ -103,6 +104,7 @@
     effect: 'original',
     effectItem: null,
     sheet: null,
+    textDraft: null,
     modalBusy: false,
     exportTimer: null,
     toastTimer: null,
@@ -545,6 +547,19 @@
     }
   }
 
+  function timedBounds(item) {
+    const min = Math.max(0, item.minStart ?? item.anchor ?? 0);
+    const max = Math.min(state.data.duration, item.limit ?? Infinity);
+    return { min, max, minimumLength: Math.min(0.2, Math.max(0, max - min)) };
+  }
+
+  function setTimedRange(item, start, end) {
+    item.start = start;
+    item.end = end;
+    renderTimedTracks(state.data);
+    syncBackgroundMedia(state.data);
+  }
+
   function addTimedTrack(item, kind, label) {
     const track = make('div', 'timed-clip timed-' + kind);
     const select = make('button', 'timed-label', label);
@@ -562,16 +577,12 @@
       let drag = null;
 
       function trim(value) {
-        const max = Math.min(state.data.duration, item.limit ?? Infinity);
-        const min = Math.max(0, item.minStart ?? item.anchor ?? 0);
-        const minimumLength = Math.min(0.2, Math.max(0, max - min));
+        const { min, max, minimumLength } = timedBounds(item);
         if (edge === 'start') {
-          item.start = clamp(value, min, Math.max(min, Math.min(item.end, max) - minimumLength));
+          setTimedRange(item, clamp(value, min, Math.max(min, Math.min(item.end, max) - minimumLength)), item.end);
         } else {
-          item.end = clamp(value, Math.min(max, item.start + minimumLength), max);
+          setTimedRange(item, item.start, clamp(value, Math.min(max, item.start + minimumLength), max));
         }
-        renderTimedTracks(state.data);
-        syncBackgroundMedia(state.data);
       }
 
       handle.addEventListener('pointerdown', event => {
@@ -1109,9 +1120,44 @@
     }
   }
 
+  function timedRangeForm(item) {
+    const form = make('form', 'timed-range-form');
+    const fields = ['开始（秒）', '结束（秒）'].map((caption, index) => {
+      const label = make('label', '', caption);
+      const input = make('input', 'text-input');
+      input.type = 'number';
+      input.step = 'any';
+      input.min = '0';
+      input.required = true;
+      input.value = (index ? Math.min(item.end, state.data.duration) : item.start).toFixed(3);
+      label.appendChild(input);
+      form.appendChild(label);
+      return input;
+    });
+    const save = make('button', 'btn primary', '应用时间');
+    save.type = 'submit';
+    form.appendChild(save);
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      const [start, end] = fields.map(input => input.valueAsNumber);
+      const { min, max, minimumLength } = timedBounds(item);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start < min || end > max + 0.0005 || end - start < minimumLength - 0.0005 || start >= end) {
+        toast('请在项目时长内设置起止时间，片段至少保留 0.2 秒');
+        return;
+      }
+      const boundedEnd = Math.min(end, max);
+      if (state.data.playing) editor.togglePlayback();
+      setTimedRange(item, Math.max(min, Math.min(start, boundedEnd - minimumLength)), boundedEnd);
+      editor.seek(item.start);
+      closeSheet();
+      toast('已更新时间');
+    });
+    return form;
+  }
+
   function buildTimedEditSheet(item) {
     const kind = { text: '文字', sticker: '贴纸', audio: '音频', pip: '画中画', effect: '特效' }[item.kind];
-    const label = item.text ?? item.emoji ?? item.name;
+    const label = item.text ?? item.name;
     const nodes = [note('当前选中：' + kind + ' · ' + label)];
     if (item.kind === 'text') {
       const form = make('form', 'text-form');
@@ -1146,6 +1192,7 @@
       nodes.push(controlRange('贴纸透明度', 10, 100, Number(item.node.style.opacity || 1) * 100,
         value => { item.node.style.opacity = value / 100; }, '%'));
     }
+    if (item.kind === 'text' || item.kind === 'sticker') nodes.push(timedRangeForm(item));
     if (item.kind === 'audio') nodes.push(...audioControls(item));
     if (item.kind === 'pip') nodes.push(pipSizeControl(item));
     nodes.push(optionGrid([
@@ -1213,8 +1260,24 @@
     input.setAttribute('aria-label', '输入文字');
     const add = make('button', 'btn primary', '添加');
     add.type = 'button';
-    let textStyle = 'plain';
-    const styles = textStyles(textStyle, value => { textStyle = value; });
+    let textStyle = 'highlight';
+    const draft = make('div', 'text-overlay text-draft');
+    draft.setAttribute('aria-hidden', 'true');
+    draft.style.pointerEvents = 'none';
+    el.textStack.appendChild(draft);
+    state.textDraft = draft;
+    function refreshDraft() {
+      positionNewText(draft);
+      draft.dataset.textStyle = textStyle;
+      draft.textContent = input.value.trim() || '输入文字…';
+      draft.hidden = !state.data?.duration;
+    }
+    const styles = textStyles(textStyle, value => {
+      textStyle = value;
+      refreshDraft();
+    });
+    input.addEventListener('input', refreshDraft);
+    refreshDraft();
     const submit = () => {
       const text = input.value.trim();
       if (!text) {
@@ -1224,12 +1287,12 @@
       }
       if (!state.data?.duration) { toast('请先添加视频'); return; }
       addTextOverlay(text, textStyle);
-      input.value = '';
+      closeSheet();
       toast('文字已添加到画面');
     };
     add.addEventListener('click', submit);
     input.addEventListener('keydown', event => {
-      if (event.key === 'Enter') {
+      if (event.key === 'Enter' && !event.isComposing) {
         event.preventDefault();
         submit();
       }
@@ -1237,11 +1300,12 @@
     form.append(input, add);
 
     const presets = make('div', 'text-presets');
-    for (const preset of ['新的一天', '记录生活', '周末愉快', '2026', '获奖时刻']) {
+    for (const preset of ['你好', '新的一天', '记录生活', '周末愉快', '2026', '获奖时刻']) {
       const chip = make('button', 'chip', preset);
       chip.type = 'button';
       chip.addEventListener('click', () => {
         input.value = preset;
+        refreshDraft();
         input.focus();
       });
       presets.appendChild(chip);
@@ -1272,7 +1336,13 @@
       });
       grid.appendChild(button);
     }
-    return [grid, note('贴纸可在预览中拖动，点右上角的 × 可删除。')];
+    const importButton = make('button', 'btn primary', '导入图片贴纸');
+    importButton.type = 'button';
+    importButton.addEventListener('click', () => {
+      if (!state.data?.duration) { toast('请先添加视频'); return; }
+      el.fileSticker.click();
+    });
+    return [importButton, grid, note('贴纸可在预览中拖动，点右上角的 × 可删除。')];
   }
 
   function buildPipSheet() {
@@ -1354,10 +1424,16 @@
     });
   }
 
+  function clearTextDraft() {
+    state.textDraft?.remove();
+    state.textDraft = null;
+  }
+
   function openSheet(tool) {
     const definition = SHEETS[tool];
     if (!definition) return;
     const wasOpen = !el.sheetRoot.hidden && state.sheet !== null;
+    clearTextDraft();
     state.sheet = tool;
     el.sheetTitle.textContent = definition.title;
     el.sheetBody.replaceChildren(...definition.build());
@@ -1376,11 +1452,13 @@
     if (!state.sheet || el.sheetRoot.hidden) return;
     const definition = SHEETS[state.sheet];
     if (!definition) return;
+    clearTextDraft();
     el.sheetBody.replaceChildren(...definition.build());
   }
 
   function closeSheet() {
     if (el.sheetRoot.hidden) return;
+    clearTextDraft();
     el.sheetRoot.classList.remove('open');
     el.toast.style.bottom = '';
     state.sheet = null;
@@ -1450,12 +1528,16 @@
     toast('已在白线处分割文字');
   }
 
+  function positionNewText(node) {
+    node.style.left = '50%';
+    node.style.top = Math.min(82, 48 + state.texts.length * 9) + '%';
+  }
+
   function addTextOverlay(text, textStyle, split) {
     const node = make('div', 'text-overlay');
     node.setAttribute('aria-label', '移动文字：' + text);
     node.dataset.textStyle = textStyle;
-    node.style.left = '50%';
-    node.style.top = Math.min(82, 48 + state.texts.length * 9) + '%';
+    positionNewText(node);
     if (split) {
       node.style.cssText = split.source.node.style.cssText;
       node.classList.toggle('is-resized', split.source.node.classList.contains('is-resized'));
@@ -1575,9 +1657,10 @@
       : '添加后可在预览画面中拖动文字。';
   }
 
-  function addSticker(emoji) {
-    const node = make('div', 'sticker', emoji);
-    node.setAttribute('aria-label', '移动贴纸：' + emoji);
+  function addSticker(label, image) {
+    const node = make('div', 'sticker', image ? undefined : label);
+    if (image) node.appendChild(image);
+    node.setAttribute('aria-label', '移动贴纸：' + label);
     const spot = STICKER_SPOTS[state.stickers.length % STICKER_SPOTS.length];
     node.style.left = `${spot[0]}%`;
     node.style.top = `${spot[1]}%`;
@@ -1587,6 +1670,7 @@
     remove.addEventListener('click', event => {
       event.stopPropagation();
       node.remove();
+      if (image) URL.revokeObjectURL(image.src);
       removeTimedTrack(state.stickers.find(item => item.node === node));
       state.stickers = state.stickers.filter(item => item.node !== node);
       renderTimedTracks(state.data);
@@ -1595,9 +1679,30 @@
     node.appendChild(remove);
     enableOverlayDrag(node, el.stickerLayer);
     el.stickerLayer.appendChild(node);
-    const item = { node, emoji, ...overlayRange() };
+    const item = { node, name: label, ...overlayRange() };
     state.stickers.push(item);
-    addTimedTrack(item, 'sticker', emoji);
+    addTimedTrack(item, 'sticker', label);
+  }
+
+  async function importSticker(file) {
+    const image = make('img', 'sticker-image');
+    image.alt = '';
+    image.draggable = false;
+    image.src = URL.createObjectURL(file);
+    try {
+      await image.decode();
+    } catch {
+      URL.revokeObjectURL(image.src);
+      toast('无法读取这张图片');
+      return;
+    }
+    if (!state.data?.duration) {
+      URL.revokeObjectURL(image.src);
+      toast('请先添加视频');
+      return;
+    }
+    addSticker(file.name, image);
+    closeSheet();
   }
 
   function applyEffect(id) {
@@ -2150,6 +2255,11 @@
       const file = el.fileAudio.files && el.fileAudio.files[0];
       el.fileAudio.value = '';
       if (file) addAudio(file);
+    });
+    el.fileSticker.addEventListener('change', () => {
+      const file = el.fileSticker.files[0];
+      el.fileSticker.value = '';
+      if (file) importSticker(file);
     });
     el.filePip.addEventListener('change', () => {
       const file = el.filePip.files && el.filePip.files[0];

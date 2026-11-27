@@ -30,8 +30,20 @@ struct Clip: Identifiable {
     var duration: Double { end - start }
 }
 
+struct VideoTitle: Identifiable {
+    var id = UUID()
+    var text: String
+    var start: Double
+    var end: Double
+
+    func contains(_ position: Double) -> Bool {
+        start <= position && position < end
+    }
+}
+
 struct Timeline {
     var clips: [Clip] = []
+    var titles: [VideoTitle] = []
 
     var duration: Double { clips.reduce(0) { $0 + $1.duration } }
 

@@ -1158,6 +1158,34 @@ button:active {
   color: #909090;
 }
 
+.timed-range-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.timed-range-form label {
+  display: grid;
+  gap: 5px;
+  font-size: 13px;
+}
+
+.timed-range-form input {
+  width: 100%;
+  min-width: 0;
+}
+
+.timed-range-form > button {
+  grid-column: 1 / -1;
+}
+
+.sticker-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
 .text-form {
   display: flex;
   gap: 8px;

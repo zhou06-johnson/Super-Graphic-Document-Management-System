@@ -57,6 +57,8 @@ final class EditorStore: ObservableObject {
         }
     }
 
+    var videoSize: CGSize { composition?.videoComposition.renderSize ?? .zero }
+
     var canSplit: Bool { timeline.splitOffset(id: selected, at: position) != nil }
     var selectedIndex: Int? { timeline.clips.firstIndex { $0.id == selected } }
 
@@ -126,6 +128,11 @@ final class EditorStore: ObservableObject {
         let start = timeline.start(of: index)
         var candidate = timeline
         candidate.clips.remove(at: index)
+        let duration = candidate.duration
+        candidate.titles.removeAll { $0.start >= duration }
+        for index in candidate.titles.indices {
+            candidate.titles[index].end = min(candidate.titles[index].end, duration)
+        }
         await edit(candidate, at: start)
     }
 
@@ -155,13 +162,39 @@ final class EditorStore: ObservableObject {
         catch { self.error = error.localizedDescription }
     }
 
+    func updateTitle(_ title: VideoTitle, deleting: Bool = false) {
+        guard !busy, hasPreview else { return }
+        if deleting {
+            guard timeline.titles.contains(where: { $0.id == title.id }) else { return }
+        } else {
+            guard title.start >= 0, title.end > title.start, title.end <= timeline.duration,
+                  !title.text.isEmpty else { return }
+        }
+        rememberTimeline()
+        if deleting {
+            timeline.titles.removeAll { $0.id == title.id }
+        } else if let index = timeline.titles.firstIndex(where: { $0.id == title.id }) {
+            timeline.titles[index] = title
+        } else {
+            timeline.titles.append(title)
+        }
+        exported = nil
+        if !deleting { seek(title.start) }
+    }
+
+    private func rememberTimeline() {
+        history.append(timeline)
+        if history.count > 30 { history.removeFirst() }
+        canUndo = true
+    }
+
     func export() async {
         guard !busy, let composition else { return }
         player.pause()
         busy = true
         defer { busy = false }
         do {
-            let file = try await composition.export()
+            let file = try await composition.export(titles: timeline.titles, duration: timeline.duration)
             outputs.insert(file)
             exported = file
         } catch { self.error = error.localizedDescription }
@@ -180,10 +213,7 @@ final class EditorStore: ObservableObject {
     ) async throws {
         player.pause()
         let next = candidate.clips.isEmpty ? nil : try await MediaComposition.build(clips: candidate.clips, muted: muted)
-        if remember {
-            history.append(timeline)
-            if history.count > 30 { history.removeFirst() }
-        }
+        if remember { rememberTimeline() }
         canUndo = !history.isEmpty
         timeline = candidate
         composition = next
@@ -209,14 +239,16 @@ struct VideoEditorView: View {
         self.onClose = onClose
     }
     @State private var picker: [PhotosPickerItem] = []
+    @State private var titleDraft: VideoTitle?
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     preview
+                    if titleDraft != nil { titleEditor }
                     timeline
-                    actions
+                    if titleDraft == nil { actions }
                     if let file = store.exported {
                         ShareLink(item: file) {
                             Label("分享或保存 MP4", systemImage: "square.and.arrow.up")
@@ -274,6 +306,7 @@ struct VideoEditorView: View {
             Color.black
             if store.hasPreview {
                 VideoPlayer(player: store.player)
+                    .overlay { titlePreview.allowsHitTesting(false) }
             } else {
                 ContentUnavailableView("添加视频开始剪辑", systemImage: "film")
                     .foregroundStyle(.white)
@@ -281,6 +314,85 @@ struct VideoEditorView: View {
         }
         .frame(height: 240)
         .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var titlePreview: some View {
+        GeometryReader { geometry in
+            let size = store.videoSize
+            if size.width > 0, size.height > 0 {
+                let scale = min(geometry.size.width / size.width, geometry.size.height / size.height)
+                let titles = store.timeline.titles.filter {
+                    $0.id != titleDraft?.id && $0.contains(store.position)
+                }
+                ZStack {
+                    ForEach(titles) { title in
+                        previewTitle(title.text, frame: size, scale: scale)
+                    }
+                    if let draft = titleDraft {
+                        previewTitle(draft.text.isEmpty ? "输入文字…" : draft.text, frame: size, scale: scale)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    private func previewTitle(_ text: String, frame: CGSize, scale: CGFloat) -> some View {
+        let image = MediaComposition.titleImage(text, frame: frame)
+        return Image(uiImage: image)
+            .resizable()
+            .frame(width: image.size.width * scale, height: image.size.height * scale)
+    }
+
+    private var titleEditor: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            TextField("输入文字", text: Binding(
+                get: { titleDraft?.text ?? "" },
+                set: { titleDraft?.text = String($0.prefix(30)) }
+            ))
+            .textFieldStyle(.roundedBorder)
+            HStack {
+                titleTimeField("开始（秒）", at: \.start)
+                titleTimeField("结束（秒）", at: \.end)
+            }
+            HStack {
+                Button("取消") { titleDraft = nil }
+                Button("保存文字") {
+                    guard var draft = titleDraft, validTitle(draft) else { return }
+                    draft.text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    store.updateTitle(draft)
+                    titleDraft = nil
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(titleDraft.map { !validTitle($0) } ?? true)
+                if let draft = titleDraft, store.timeline.titles.contains(where: { $0.id == draft.id }) {
+                    Button("删除文字", role: .destructive) {
+                        store.updateTitle(draft, deleting: true)
+                        titleDraft = nil
+                    }
+                }
+            }
+            if let draft = titleDraft, !validTitle(draft) {
+                Text("请输入文字，并设置项目时长内的起止时间。").font(.caption)
+            }
+        }
+    }
+
+    private func validTitle(_ title: VideoTitle) -> Bool {
+        !title.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            title.start >= 0 && title.end > title.start && title.end <= store.timeline.duration
+    }
+
+    private func titleTimeField(_ label: String, at keyPath: WritableKeyPath<VideoTitle, Double>) -> some View {
+        VStack(alignment: .leading) {
+            Text(label).font(.caption)
+            TextField(label, value: Binding(
+                get: { titleDraft?[keyPath: keyPath] ?? 0 },
+                set: { titleDraft?[keyPath: keyPath] = $0 }
+            ), format: .number.precision(.fractionLength(0...3)))
+            .keyboardType(.decimalPad)
+            .textFieldStyle(.roundedBorder)
+        }
     }
 
     private var timeline: some View {
@@ -316,11 +428,40 @@ struct VideoEditorView: View {
                     }
                 }
             }
+            if store.hasPreview && !store.timeline.titles.isEmpty {
+                ScrollView(.horizontal) {
+                    HStack {
+                        ForEach(store.timeline.titles) { title in
+                            Button {
+                                editTitle(title)
+                            } label: {
+                                VStack(alignment: .leading) {
+                                    Text(title.text).lineLimit(1)
+                                    Text("\(title.start.formatted(.number.precision(.fractionLength(2))))–\(title.end.formatted(.number.precision(.fractionLength(2)))) 秒")
+                                        .font(.caption)
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .tint(.orange)
+                        }
+                    }
+                }
+                .accessibilityLabel("文字轨道")
+            }
         }
+    }
+
+    private func editTitle(_ title: VideoTitle) {
+        store.seek(title.start)
+        titleDraft = title
     }
 
     private var actions: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 102))], spacing: 10) {
+            action("添加文字", "textformat", enabled: store.hasPreview) {
+                let start = min(store.position, max(0, store.timeline.duration - Clip.minimumLength))
+                editTitle(VideoTitle(text: "", start: start, end: min(start + 3, store.timeline.duration)))
+            }
             action("分割", "scissors", enabled: store.canSplit) { await store.split() }
             action("删除", "trash", enabled: store.selected != nil) { await store.delete() }
             action("前移", "arrow.left", enabled: (store.selectedIndex ?? 0) > 0) { await store.move(by: -1) }

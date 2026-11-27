@@ -1,6 +1,8 @@
 import AVFoundation
 import CoreGraphics
 import Foundation
+import QuartzCore
+import UIKit
 
 enum MediaError: LocalizedError {
     case unreadable, cannotCompose, cannotExport
@@ -96,13 +98,88 @@ struct MediaComposition {
         return item
     }
 
-    func export() async throws -> URL {
+    // Render the same outlined title for the player overlay and the exported movie.
+    @MainActor
+    static func titleImage(_ text: String, frame: CGSize) -> UIImage {
+        let height = min(frame.width, frame.height) * 0.18
+        let width = frame.width * 0.9
+        let font = UIFont.boldSystemFont(ofSize: height * 0.55)
+        let line = NSAttributedString(string: text, attributes: [.font: font])
+        let scale = min(1, width / max(1, line.size().width + 8))
+        let fitted = UIFont.boldSystemFont(ofSize: font.pointSize * scale)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: CGSize(width: width, height: height), format: format).image { _ in
+            let title = NSAttributedString(string: text, attributes: [
+                .font: fitted,
+                .foregroundColor: UIColor(red: 1, green: 0.855, blue: 0.34, alpha: 1),
+                .strokeColor: UIColor.black,
+                .strokeWidth: -5
+            ])
+            let size = title.size()
+            title.draw(at: CGPoint(x: (width - size.width) / 2, y: (height - size.height) / 2))
+        }
+    }
+
+    @MainActor
+    private func compositionForExport(titles: [VideoTitle], duration: Double) -> AVVideoComposition {
+        guard !titles.isEmpty else { return videoComposition }
+        let result = AVMutableVideoComposition()
+        result.renderSize = videoComposition.renderSize
+        result.frameDuration = videoComposition.frameDuration
+        result.instructions = videoComposition.instructions
+        let bounds = CGRect(origin: .zero, size: result.renderSize)
+        let parent = CALayer()
+        let video = CALayer()
+        parent.frame = bounds
+        video.frame = bounds
+        parent.addSublayer(video)
+
+        for title in titles where title.start < duration && title.end > title.start {
+            let image = Self.titleImage(title.text, frame: bounds.size)
+            let layer = CALayer()
+            layer.bounds = CGRect(origin: .zero, size: image.size)
+            layer.position = CGPoint(x: bounds.width / 2, y: bounds.height / 2)
+            layer.contents = image.cgImage
+            layer.opacity = 0
+            parent.addSublayer(layer)
+
+            let visibility = CAKeyframeAnimation(keyPath: "opacity")
+            let start = title.start / duration
+            let end = min(title.end / duration, 1)
+            var values = [start == 0 ? 1 : 0]
+            var times: [NSNumber] = [0]
+            if start > 0 {
+                values.append(1)
+                times.append(NSNumber(value: start))
+            }
+            if end < 1 {
+                values.append(0)
+                times.append(NSNumber(value: end))
+            }
+            values.append(values.last ?? 0)
+            times.append(1)
+            visibility.values = values
+            visibility.keyTimes = times
+            visibility.calculationMode = .discrete
+            visibility.beginTime = AVCoreAnimationBeginTimeAtZero
+            visibility.duration = duration
+            visibility.isRemovedOnCompletion = false
+            layer.add(visibility, forKey: "visibility")
+        }
+
+        result.animationTool = AVVideoCompositionCoreAnimationTool(postProcessingAsVideoLayer: video, in: parent)
+        return result
+    }
+
+    @MainActor
+    func export(titles: [VideoTitle], duration: Double) async throws -> URL {
         guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality),
               session.supportedFileTypes.contains(.mp4) else { throw MediaError.cannotExport }
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("MemoirsCore-" + UUID().uuidString)
             .appendingPathExtension("mp4")
-        session.videoComposition = videoComposition
+        session.videoComposition = compositionForExport(titles: titles, duration: duration)
         session.shouldOptimizeForNetworkUse = true
         do {
             if #available(iOS 18.0, *) {
