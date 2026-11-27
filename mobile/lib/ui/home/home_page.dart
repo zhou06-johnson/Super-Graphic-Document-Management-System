@@ -170,6 +170,23 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  Future<void> _openVideoEditor() async {
+    const channel = MethodChannel('memoirscore/video_editor');
+    try {
+      await channel.invokeMethod<void>('open');
+    } on MissingPluginException {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('当前版本无法打开视频剪辑。')),
+      );
+    } on PlatformException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.message ?? '暂时无法打开视频剪辑。')),
+      );
+    }
+  }
+
   Future<void> _openSettings() async {
     final changed = await Navigator.of(context).push<bool>(
       CupertinoPageRoute<bool>(builder: (_) => const SettingsPage()),
@@ -467,7 +484,12 @@ class _HomePageState extends State<HomePage> {
               left: 0,
               right: 0,
               top: 0,
-              child: _LiquidGlassHeader(onSettings: _openSettings),
+              child: _LiquidGlassHeader(
+                onSettings: _openSettings,
+                onVideoEditor: !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS
+                    ? _openVideoEditor
+                    : null,
+              ),
             ),
             // Liquid glass bottom overlay（与 header 渐变方向相反）
             const Positioned(
@@ -545,7 +567,9 @@ class _GlassFab extends StatelessWidget {
 }
 
 class _LiquidGlassHeader extends StatelessWidget {
-  const _LiquidGlassHeader({required this.onSettings});
+  const _LiquidGlassHeader({required this.onSettings, this.onVideoEditor});
+
+  final VoidCallback? onVideoEditor;
 
   final VoidCallback onSettings;
 
@@ -612,6 +636,20 @@ class _LiquidGlassHeader extends StatelessWidget {
                           ),
                         ),
                       ),
+                      if (onVideoEditor != null) const Spacer(),
+                      if (onVideoEditor != null)
+                        CupertinoButton(
+                          padding: const EdgeInsets.all(10),
+                          onPressed: onVideoEditor,
+                          child: const Tooltip(
+                            message: '视频剪辑',
+                            child: Icon(
+                              Icons.video_camera_back_outlined,
+                              color: Color(0xFF30343B),
+                              size: 22,
+                            ),
+                          ),
+                        ),
                       CupertinoButton(
                         padding: const EdgeInsets.all(10),
                         onPressed: onSettings,

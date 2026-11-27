@@ -11,7 +11,8 @@
 
 ## 接入 MemoirsCore
 
-将三个 Swift 文件加入总工程的 App target，移除独立工程的 `VideoEditorApp` 入口声明，由 MemoirsCore 的导航打开 `VideoEditorView()`。临时素材和导出文件由独立编辑器会话管理。合成画幅以第一段视频为准，其他片段按比例适配。
+在 Mac 上进入总仓库的 `mobile/`，执行 `flutter pub get` 和 `flutter run`，选择 iOS 17 或更新版本的设备。打开 MemoirsCore 后，点首页右上方、设置旁的「视频剪辑」。用上面的步骤验证导入、剪辑和导出，再点「返回」确认可以回到首页。
+
+Runner 直接引用此目录的三个 Swift 文件，并通过 `MEMOIRSCORE_HOST` 编译条件使用 Flutter 的 App 入口。独立 Xcode 工程仍可单独运行。临时素材和导出文件由本次编辑会话管理。导出后请先保存或分享，再退出剪辑页。
 
 此目录覆盖主视频轨。文字、贴纸、独立配乐、画中画、特效及草稿保存待实现。网页原型在同级 `demo/`。
-

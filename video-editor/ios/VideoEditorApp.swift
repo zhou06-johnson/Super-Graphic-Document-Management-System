@@ -4,12 +4,15 @@ import Foundation
 import PhotosUI
 import SwiftUI
 
+#if !MEMOIRSCORE_HOST
 @main
 struct VideoEditorApp: App {
     var body: some Scene {
         WindowGroup { VideoEditorView() }
     }
 }
+
+#endif
 
 @MainActor
 final class EditorStore: ObservableObject {
@@ -199,7 +202,12 @@ final class EditorStore: ObservableObject {
 
 @MainActor
 struct VideoEditorView: View {
+    private let onClose: (() -> Void)?
     @StateObject private var store = EditorStore()
+
+    init(onClose: (() -> Void)? = nil) {
+        self.onClose = onClose
+    }
     @State private var picker: [PhotosPickerItem] = []
 
     var body: some View {
@@ -222,6 +230,15 @@ struct VideoEditorView: View {
             .navigationTitle("视频剪辑")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                if let onClose {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("返回") {
+                            store.player.pause()
+                            onClose()
+                        }
+                        .disabled(store.busy)
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     PhotosPicker(selection: $picker, maxSelectionCount: 12, matching: .videos) {
                         Label("添加视频", systemImage: "plus")
