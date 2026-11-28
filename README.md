@@ -4,56 +4,54 @@
 未启动时打开；连接后端后，照片、回忆、故事、行程和 Bot 才能使用。首页
 会在本机缓存最近一次卡片元数据和 API 地址。
 
-## iOS 模拟器
+## 运行 iOS 客户端
 
-需要 macOS、Xcode、Flutter（满足 `mobile/pubspec.yaml` 的 Dart SDK 约束）和
-CocoaPods。打开终端运行：
-到mobile
+需要 macOS、Xcode、CocoaPods 和符合 [Flutter 项目 SDK 约束](mobile/pubspec.yaml) 的 Flutter 环境。Runner 的部署目标为 iOS 17。启动模拟器后，在仓库目录运行：
+
 ```sh
 cd mobile
-```
-查看有没有装好flutter
-```sh
-flutter --version
-```
-如果完成，可以查询本地设备，在本地设备中运行
-```sh
+flutter pub get
 flutter devices
 flutter run
 ```
-如果没条件可以跑在谷歌浏览器中
-```sh
-flutter run -d chrome
-```
+
+在 Windows 上可以直接用浏览器打开[剪辑 Demo](video-editor/demo/index.html)。测试原生剪辑和 MP4 导出时使用 iOS 模拟器或 iPhone。
+
+## 视频剪辑
+
+在 MemoirsCore 的「图库」中导入照片和视频，再从首页打开「视频剪辑」。「添加素材」用于手动混剪，「AI 剪辑」用于根据一句话和必用素材生成可编辑的时间轴。启用本地语音识别后，AI 剪辑会为留下的对白自动加字幕，预览和导出都可查看。
+
+- 先按下方步骤运行后端，再按[剪辑联调指南](video-editor/ios/README.md#后端配置)依次验证手动剪辑、配置 DeepSeek、下载本地语音模型和测试自动字幕。
+- [网页 Demo 说明](video-editor/demo/README.md)涵盖浏览器演示和项目结构。
+
 ## 运行 API 后端
 
-后端需要 Python 依赖、MongoDB 服务；地图和 Bot 功能还需要相应 API 密钥。
-从 `backend/` 目录运行：
+运行后端的电脑需要 Python 和 MongoDB。先启动 MongoDB，再从仓库根目录进入 `backend/` 并安装依赖。
 
-创建启动环境，安装库
+**Windows PowerShell**
+
+```powershell
+Set-Location backend
+python -m venv .venv
+if (-not (Test-Path -LiteralPath .env)) { Copy-Item .env.example .env }
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe main.py
+```
+
+**macOS**
+
 ```sh
+cd backend
 brew install cmake dlib imagemagick
 python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-```
-启动后端
-```sh
-python main.py
-```
-先启动 MongoDB，并在 `.env` 中填写需要的密钥。iPhone 真机访问时，后端
-需要监听局域网接口：
-
-```sh
-MEMOIRS_HOST=0.0.0.0 MEMOIRS_PORT=8000 python main.py
+test -f .env || cp .env.example .env
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python main.py
 ```
 
-在 iOS 设置页输入运行后端的电脑局域网地址，例如
-`http://192.168.1.20:8000`。模拟器的默认地址为
-`http://127.0.0.1:8000`。电脑防火墙需允许本地网络的 8000 端口访问。
+启动后打开 `http://127.0.0.1:8000/api/health`。iOS 模拟器与后端在同一台 Mac 时，App 可填 `http://127.0.0.1:8000`。真机或另一台电脑访问时，后端在 `.env` 里配置 `MEMOIRS_HOST=0.0.0.0`，App 填实际局域网地址，例如 `http://192.168.1.20:8000`。两台设备应能互相访问，电脑防火墙需允许局域网连接 8000 端口。
 
-`backend/.env` 不随本项目交付；请从 `.env.example` 创建，并自行填写密钥。
-不要将真实密钥提交到版本库或分享的压缩包。
+地图、Bot 和 AI 剪辑使用各自的后端配置。请在本机的 `backend/.env` 填真实密钥，提交给队友的 `.env.example` 只保留占位项。配置改动后重启后端。
 
 ## 本地存储
 
@@ -63,14 +61,10 @@ Support 目录，记录 API 地址和首页最近一次成功读取的卡片数�
 
 ## iOS 构建说明
 
-- iOS 部署目标为 13.0；`ios/Podfile` 安装插件 CocoaPods。
-- `ios/Runner/Info.plist` 声明位置、相册和局域网用途，并允许 ATS 本地网络
+- `mobile/ios/Podfile` 管理 iOS 插件依赖。
+- `mobile/ios/Runner/Info.plist` 声明位置、相册和局域网用途，并允许 ATS 本地网络
   连接。真机首次联网时需在系统提示中允许本地网络访问。
-- Xcode 工程初始 Bundle Identifier 是 `com.example.mobile`。真机签名或
-  发布前，请在 Xcode 换成你自己的唯一标识并选择 Apple 开发团队。
-- 当前执行环境没有 Flutter、Dart 或 CocoaPods，且 iOS 模拟器服务不可用；
-  因此本次无法在此环境完成 Flutter 编译或真机/模拟器启动。源码与配置检查
-  结果列在交付说明中。
+- 真机签名时，在 Xcode 中为 Runner 选择 Apple 开发团队，并按需更改 Bundle Identifier。
 
 ## 文件说明
 

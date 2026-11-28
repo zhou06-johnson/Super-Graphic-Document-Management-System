@@ -196,10 +196,15 @@ def _speech_model(model_path):
     return WhisperModel(model_path, device="cpu", compute_type="int8")
 
 
-def _transcript(path, start):
-    model_path = os.getenv("MEMOIRS_ASR_MODEL_PATH", "").strip()
-    if not model_path:
-        return []
+def _transcript(path, start, model_path):
+    import av
+
+    with av.open(str(path)) as container:
+        if not container.streams.audio:
+            return []
+        track = container.streams.audio[0]
+        if track.start_time is not None:
+            start = float(track.start_time * track.time_base)
     model = _speech_model(model_path)
     segments, _ = model.transcribe(str(path), vad_filter=True)
     result = []
@@ -207,9 +212,14 @@ def _transcript(path, start):
         if segment.text.strip():
             result.append({"start": round(segment.start + start, 3), "end": round(segment.end + start, 3),
                            "text": segment.text.strip()[:240]})
-        if len(result) == 120:
-            break
     return result
+
+
+def _clip_subtitles(speech, start, end):
+    return [
+        {"start": max(start, line["start"]), "end": min(end, line["end"]), "text": line["text"]}
+        for line in speech if min(end, line["end"]) - max(start, line["start"]) >= 0.15
+    ]
 
 
 async def _generate_cutaway(prompt, destination):
@@ -310,6 +320,23 @@ def make_router(root: Path, photo_items, photo_source, recognize_video_people=No
     video_root = root / "Videos"
     photo_root = root / "PhotoIndex"
     generated_root = root / "Generated"
+    speech_lock = asyncio.Lock()
+
+    async def speech_for(path, info):
+        model_path = os.getenv("MEMOIRS_ASR_MODEL_PATH", "").strip()
+        if not model_path:
+            return []
+        async with speech_lock:
+            cache = path / "speech.json"
+            if cache.is_file():
+                cached = json.loads(cache.read_text(encoding="utf-8"))
+                if cached["model"] == model_path:
+                    return cached["lines"]
+            lines = await asyncio.to_thread(_transcript, path / info["file"], info["start"], model_path)
+            temp = path / "speech.tmp"
+            temp.write_text(json.dumps({"model": model_path, "lines": lines}, ensure_ascii=False), encoding="utf-8")
+            temp.replace(cache)
+            return lines
 
     def asset_path(folder, asset_id):
         if not re.fullmatch(r"[0-9a-f]{32}", asset_id):
@@ -340,16 +367,15 @@ def make_router(root: Path, photo_items, photo_source, recognize_video_people=No
                 if frames:
                     (path / "thumb.jpg").write_bytes(frames[0][1])
                     info["has_thumbnail"] = True
-                for field, operation, args in (
-                    ("speech", _transcript, (path / info["file"], info["start"])),
-                    ("people_observations", recognize_video_people, (frames,)),
-                ):
-                    if operation is None:
-                        continue
+                try:
+                    info["metadata"]["speech"] = (await speech_for(path, info))[:120]
+                except Exception as exc:
+                    logger.warning("AI editor speech unavailable: %s", type(exc).__name__)
+                if recognize_video_people is not None:
                     try:
-                        info["metadata"][field] = await asyncio.to_thread(operation, *args)
+                        info["metadata"]["people_observations"] = await asyncio.to_thread(recognize_video_people, frames)
                     except Exception as exc:
-                        logger.warning("AI editor %s unavailable: %s", field, type(exc).__name__)
+                        logger.warning("AI editor people unavailable: %s", type(exc).__name__)
             if not os.getenv("DEEPSEEK_API_KEY", "").strip():
                 info["status"] = "local"
                 write(path, info)
@@ -574,6 +600,23 @@ def make_router(root: Path, photo_items, photo_source, recognize_video_people=No
                 continue
             if cutaway is not None:
                 await insert_cutaway(validated, cutaway)
+            selected_items = {item["id"]: item for item in items if item["kind"] == "video"}
+            speech = {}
+            if os.getenv("MEMOIRS_ASR_MODEL_PATH", "").strip():
+                for clip in validated["clips"]:
+                    source = clip["asset_id"]
+                    if source not in selected_items:
+                        continue
+                    if source not in speech:
+                        try:
+                            speech[source] = await speech_for(asset_path(video_root, source), selected_items[source])
+                        except Exception as exc:
+                            logger.warning("AI editor subtitles unavailable: %s", type(exc).__name__)
+                            speech[source] = []
+                            validated["subtitle_notice"] = "部分素材语音识别失败，其他素材的字幕保留。"
+                    clip["subtitles"] = _clip_subtitles(speech[source], clip["start"], clip["end"])
+            elif any(clip["asset_id"] in selected_items for clip in validated["clips"]):
+                validated["subtitle_notice"] = "后端尚未配置语音识别，本次未生成自动字幕。"
             return validated
         raise HTTPException(422, "无法在当前要求下使用全部必用素材，请减少素材或放宽时长")
 

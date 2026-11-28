@@ -103,9 +103,12 @@ struct MediaComposition {
         return item
     }
 
-    // Render the same outlined title for the player overlay and the exported movie.
+    static let subtitleOffset: CGFloat = 0.35
+
+    // Render the same text for the player overlay and the exported movie.
     @MainActor
-    static func titleImage(_ text: String, frame: CGSize) -> UIImage {
+    static func titleImage(_ text: String, frame: CGSize, subtitle: Bool = false) -> UIImage {
+        if subtitle { return subtitleImage(text, frame: frame) }
         let height = min(frame.width, frame.height) * 0.18
         let width = frame.width * 0.9
         let font = UIFont.boldSystemFont(ofSize: height * 0.55)
@@ -127,6 +130,36 @@ struct MediaComposition {
     }
 
     @MainActor
+    private static func subtitleImage(_ text: String, frame: CGSize) -> UIImage {
+        let shortSide = min(frame.width, frame.height)
+        let width = frame.width * 0.88
+        let height = shortSide * 0.23
+        let padding = shortSide * 0.022
+        let style = NSMutableParagraphStyle()
+        style.alignment = .center
+        style.lineBreakMode = .byCharWrapping
+        let font = UIFont.systemFont(ofSize: shortSide * 0.05, weight: .semibold)
+        let label = NSAttributedString(string: text, attributes: [
+            .font: font, .foregroundColor: UIColor.white, .paragraphStyle: style
+        ])
+        let textWidth = width - 2 * padding
+        let drawingOptions: NSStringDrawingOptions = [.usesLineFragmentOrigin, .usesFontLeading, .truncatesLastVisibleLine]
+        let measured = label.boundingRect(
+            with: CGSize(width: textWidth, height: .greatestFiniteMagnitude),
+            options: drawingOptions, context: nil
+        )
+        let textHeight = min(ceil(measured.height) + 1, ceil(font.lineHeight * 3) + 1)
+        let rect = CGRect(x: padding, y: (height - textHeight) / 2, width: textWidth, height: textHeight)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: CGSize(width: width, height: height), format: format).image { _ in
+            UIColor.black.withAlphaComponent(0.72).setFill()
+            UIBezierPath(roundedRect: rect.insetBy(dx: -padding, dy: -padding / 2), cornerRadius: padding / 2).fill()
+            label.draw(with: rect, options: drawingOptions, context: nil)
+        }
+    }
+
+    @MainActor
     private func compositionForExport(titles: [VideoTitle], duration: Double) -> AVVideoComposition {
         guard !titles.isEmpty else { return videoComposition }
         let result = AVMutableVideoComposition()
@@ -141,10 +174,11 @@ struct MediaComposition {
         parent.addSublayer(video)
 
         for title in titles where title.start < duration && title.end > title.start {
-            let image = Self.titleImage(title.text, frame: bounds.size)
+            let image = Self.titleImage(title.text, frame: bounds.size, subtitle: title.isSubtitle)
             let layer = CALayer()
             layer.bounds = CGRect(origin: .zero, size: image.size)
-            layer.position = CGPoint(x: bounds.width / 2, y: bounds.height / 2)
+            let centerY = title.isSubtitle ? 0.5 - Self.subtitleOffset : 0.5
+            layer.position = CGPoint(x: bounds.width / 2, y: bounds.height * centerY)
             layer.contents = image.cgImage
             layer.opacity = 0
             parent.addSublayer(layer)

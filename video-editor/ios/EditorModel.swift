@@ -18,6 +18,17 @@ struct ImportedMovie: Transferable {
     }
 }
 
+struct SpeechSubtitle: Decodable, Identifiable {
+    private(set) var id = UUID()
+    let start: Double
+    let end: Double
+    let text: String
+
+    enum CodingKeys: String, CodingKey {
+        case start, end, text
+    }
+}
+
 struct Clip: Identifiable {
     static let minimumLength = 0.15
 
@@ -27,6 +38,7 @@ struct Clip: Identifiable {
     var start: Double
     var end: Double
     var isGenerated = false
+    var subtitles: [SpeechSubtitle] = []
 
     var duration: Double { end - start }
 }
@@ -36,6 +48,7 @@ struct VideoTitle: Identifiable {
     var text: String
     var start: Double
     var end: Double
+    var isSubtitle = false
 
     func contains(_ position: Double) -> Bool {
         start <= position && position < end
@@ -57,6 +70,24 @@ struct Timeline {
                 labels.append(VideoTitle(id: clip.id, text: "AI 生成画面", start: position, end: end))
             }
             position = end
+        }
+        return labels
+    }
+
+    var subtitles: [VideoTitle] {
+        var position = 0.0
+        var labels: [VideoTitle] = []
+        for clip in clips {
+            for line in clip.subtitles {
+                let start = max(clip.start, line.start)
+                let end = min(clip.end, line.end)
+                if end - start >= 0.15 {
+                    labels.append(VideoTitle(id: line.id, text: line.text,
+                                             start: position + start - clip.start,
+                                             end: position + end - clip.start, isSubtitle: true))
+                }
+            }
+            position += clip.duration
         }
         return labels
     }

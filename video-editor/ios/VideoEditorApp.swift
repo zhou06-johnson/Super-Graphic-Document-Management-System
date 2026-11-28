@@ -159,7 +159,7 @@ final class EditorStore: ObservableObject {
                 let generated = segment.generated == true
                 project.clips.append(Clip(
                     url: url, name: generated ? "AI 生成画面" : names[segment.assetID] ?? "素材",
-                    start: start, end: end, isGenerated: generated
+                    start: start, end: end, isGenerated: generated, subtitles: segment.subtitles ?? []
                 ))
             }
             if !plan.closingTitle.isEmpty {
@@ -344,7 +344,7 @@ final class EditorStore: ObservableObject {
         defer { busy = false }
         do {
             let file = try await composition.export(
-                titles: timeline.titles + timeline.generatedTitles, duration: timeline.duration
+                titles: timeline.titles + timeline.generatedTitles + timeline.subtitles, duration: timeline.duration
             )
             outputs.insert(file)
             exported = file
@@ -400,6 +400,7 @@ struct VideoEditorView: View {
     }
 
     @State private var libraryMode: LibraryMode?
+    @State private var subtitleNotice: String?
     @State private var pendingPreferences: [String] = []
     @AppStorage("memoirscore.aiEditor.preferences") private var storedPreferences = Data()
 
@@ -425,6 +426,9 @@ struct VideoEditorView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     preview
                     if store.hasPreview { proxyControls }
+                    if let subtitleNotice {
+                        Text(subtitleNotice).font(.footnote).foregroundStyle(.secondary)
+                    }
                     if titleDraft != nil { titleEditor }
                     timeline
                     if titleDraft == nil {
@@ -491,7 +495,10 @@ struct VideoEditorView: View {
                 if let aiService {
                     LibraryEditSheet(service: aiService, preferences: preferences, manual: mode == .manual) { plan, assets in
                         if await store.applyPlan(plan, assets: assets, service: aiService, appending: mode == .manual) {
-                            if mode == .ai { pendingPreferences = plan.preferences }
+                            if mode == .ai {
+                                pendingPreferences = plan.preferences
+                                subtitleNotice = plan.subtitleNotice
+                            }
                             libraryMode = nil
                             return nil
                         }
@@ -549,12 +556,13 @@ struct VideoEditorView: View {
             let size = store.videoSize
             if size.width > 0, size.height > 0 {
                 let scale = min(geometry.size.width / size.width, geometry.size.height / size.height)
-                let titles = (store.timeline.titles + store.timeline.generatedTitles).filter {
+                let titles = (store.timeline.titles + store.timeline.generatedTitles + store.timeline.subtitles).filter {
                     $0.id != titleDraft?.id && $0.contains(store.position)
                 }
                 ZStack {
                     ForEach(titles) { title in
-                        previewTitle(title.text, frame: size, scale: scale)
+                        previewTitle(title.text, frame: size, scale: scale, subtitle: title.isSubtitle)
+                            .offset(y: title.isSubtitle ? size.height * scale * MediaComposition.subtitleOffset : 0)
                     }
                     if let draft = titleDraft {
                         previewTitle(draft.text.isEmpty ? "输入文字…" : draft.text, frame: size, scale: scale)
@@ -565,8 +573,8 @@ struct VideoEditorView: View {
         }
     }
 
-    private func previewTitle(_ text: String, frame: CGSize, scale: CGFloat) -> some View {
-        let image = MediaComposition.titleImage(text, frame: frame)
+    private func previewTitle(_ text: String, frame: CGSize, scale: CGFloat, subtitle: Bool = false) -> some View {
+        let image = MediaComposition.titleImage(text, frame: frame, subtitle: subtitle)
         return Image(uiImage: image)
             .resizable()
             .frame(width: image.size.width * scale, height: image.size.height * scale)
@@ -749,20 +757,23 @@ struct AIEditPlan: Decodable {
         let start: Double
         let end: Double
         let generated: Bool?
+        let subtitles: [SpeechSubtitle]?
 
         enum CodingKeys: String, CodingKey {
             case assetID = "asset_id"
-            case start, end, generated
+            case start, end, generated, subtitles
         }
     }
 
     let clips: [Segment]
     let closingTitle: String
     let preferences: [String]
+    let subtitleNotice: String?
 
     enum CodingKeys: String, CodingKey {
         case clips, preferences
         case closingTitle = "closing_title"
+        case subtitleNotice = "subtitle_notice"
     }
 }
 
@@ -965,13 +976,13 @@ private struct LibraryEditSheet: View {
                 let indexed = Dictionary(assets.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
                 let clips = selected.compactMap { id -> AIEditPlan.Segment? in
                     guard let item = indexed[id], item.end > item.start else { return nil }
-                    return AIEditPlan.Segment(assetID: id, start: item.start, end: item.end, generated: nil)
+                    return AIEditPlan.Segment(assetID: id, start: item.start, end: item.end, generated: nil, subtitles: nil)
                 }
                 guard clips.count == selected.count, !clips.isEmpty else {
                     message = "所选素材已变更，请重新选择。"
                     return
                 }
-                plan = AIEditPlan(clips: clips, closingTitle: "", preferences: [])
+                plan = AIEditPlan(clips: clips, closingTitle: "", preferences: [], subtitleNotice: nil)
             } else {
                 plan = try await service.makePlan(
                     prompt: prompt, required: Set(selected), onlyRequired: onlyRequired && !selected.isEmpty,
