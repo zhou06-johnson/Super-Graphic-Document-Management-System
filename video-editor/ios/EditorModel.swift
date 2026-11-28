@@ -26,6 +26,7 @@ struct Clip: Identifiable {
     let name: String
     var start: Double
     var end: Double
+    var isGenerated = false
 
     var duration: Double { end - start }
 }
@@ -46,6 +47,19 @@ struct Timeline {
     var titles: [VideoTitle] = []
 
     var duration: Double { clips.reduce(0) { $0 + $1.duration } }
+
+    var generatedTitles: [VideoTitle] {
+        var position = 0.0
+        var labels: [VideoTitle] = []
+        for clip in clips {
+            let end = position + clip.duration
+            if clip.isGenerated {
+                labels.append(VideoTitle(id: clip.id, text: "AI 生成画面", start: position, end: end))
+            }
+            position = end
+        }
+        return labels
+    }
 
     func start(of index: Int) -> Double {
         clips.prefix(index).reduce(0) { $0 + $1.duration }

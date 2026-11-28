@@ -78,6 +78,7 @@ from anyio import open_file
 import uvicorn
 from asyncio import Queue, CancelledError # FIX: Import the asyncio Queue and CancelledError
 import httpx
+from ai_editor import make_router as make_ai_editor_router
 
 logger = logging.getLogger("uvicorn.info")
 AMAP_WEB_KEY = os.getenv("AMAP_WEB_KEY", "").strip()
@@ -742,6 +743,73 @@ app.add_middleware(
 from memoir_feed import router as memoir_feed_router
 
 app.include_router(memoir_feed_router)
+async def _editor_photo_source(photo_id: int) -> Path:
+    response = await get_photo_file(photo_id)
+    return Path(response.path)
+
+
+async def _editor_photo_items() -> list[dict]:
+    photos = []
+    offset = 0
+    while True:
+        batch = await list_photos(offset=offset, limit=200)
+        photos.extend(batch)
+        if len(batch) < 200:
+            break
+        offset += len(batch)
+    ids = [photo.id for photo in photos if photo.id is not None]
+    enhanced = {}
+    if ids and mongodb_available():
+        for offset in range(0, len(ids), 200):
+            enhanced.update(await asyncio.to_thread(get_enhanced_docs, ids[offset:offset + 200]))
+    items = []
+    for photo in photos:
+        if photo.id is None:
+            continue
+        document = enhanced.get(str(photo.id), {})
+        location = document.get("img_location") or {}
+        time = document.get("img_time") or {}
+        items.append({
+            "id": f"photo-{photo.id}", "photo_id": photo.id, "kind": "photo",
+            "name": photo.filename, "status": "pending", "start": 0.0, "end": 5.0,
+            "has_thumbnail": True, "playable": True,
+            "metadata": {
+                "description": photo.description,
+                "location": location.get("name") if isinstance(location, dict) else None,
+                "creation_time": str(time.get("taken_at") or "") if isinstance(time, dict) else "",
+                "people": extract_people(document) or [],
+            },
+        })
+    return items
+
+
+def _editor_video_people(frames) -> list[dict]:
+    if not ENCODINGS_FILE.is_file():
+        return []
+    organizer_logic.initialize_libraries()
+    if organizer_logic.face_recognition is None:
+        return []
+    known_encodings, known_names = load_face_encodings(str(ENCODINGS_FILE))
+    if not known_encodings or not known_names:
+        return []
+    from tempfile import TemporaryDirectory
+
+    observations = []
+    with TemporaryDirectory() as folder:
+        sample = Path(folder) / "frame.jpg"
+        for timestamp, jpg in frames:
+            sample.write_bytes(jpg)
+            names = recognize_faces(str(sample), known_encodings, known_names, "balanced")
+            people = sorted({str(name) for name in names if name and str(name).lower() != "unknown"})
+            if people:
+                observations.append({"time": timestamp, "people": people})
+    return observations
+
+
+ai_editor_router, index_editor_photos = make_ai_editor_router(
+    APP_DATA_DIR / "AIEditor", _editor_photo_items, _editor_photo_source, _editor_video_people
+)
+app.include_router(ai_editor_router)
 
 # --- Pydantic Models for API Data Validation ---
 
@@ -1579,6 +1647,7 @@ async def create_photo(
             )
 
         background_tasks.add_task(pre_process_vision_descriptions, [int(img_id)])
+        background_tasks.add_task(index_editor_photos, [int(img_id)])
         background_tasks.add_task(pre_process_face_people, [int(img_id)])
 
         return {
@@ -1641,6 +1710,7 @@ async def create_photo(
 
         # Vision pre-process (AI description) + Mongo sync
         background_tasks.add_task(pre_process_vision_descriptions, [int(photo.id)])
+        background_tasks.add_task(index_editor_photos, [int(photo.id)])
 
     return {
         "duplicate": False,
@@ -1751,6 +1821,7 @@ async def create_photos_batch(
 
         if new_photo_ids:
             background_tasks.add_task(pre_process_vision_descriptions, new_photo_ids)
+            background_tasks.add_task(index_editor_photos, new_photo_ids)
             background_tasks.add_task(pre_process_face_people, new_photo_ids)
 
         return {"added": added, "duplicates": duplicates}
@@ -1843,6 +1914,7 @@ async def create_photos_batch(
     # 上传成功后，后台静默预处理：生成 AI 视觉描述并写入同级 .json
     if new_photo_ids:
         background_tasks.add_task(pre_process_vision_descriptions, new_photo_ids)
+        background_tasks.add_task(index_editor_photos, new_photo_ids)
 
     return {"added": added, "duplicates": duplicates}
 
@@ -1897,6 +1969,7 @@ async def upload_cover(
         )
 
         background_tasks.add_task(pre_process_vision_descriptions, [int(img_id)])
+        background_tasks.add_task(index_editor_photos, [int(img_id)])
         background_tasks.add_task(pre_process_face_people, [int(img_id)])
 
         return {

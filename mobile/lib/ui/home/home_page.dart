@@ -173,7 +173,9 @@ class _HomePageState extends State<HomePage> {
   Future<void> _openVideoEditor() async {
     const channel = MethodChannel('memoirscore/video_editor');
     try {
-      await channel.invokeMethod<void>('open');
+      await channel.invokeMethod<void>('open', {
+        'baseUrl': context.read<ApiClient>().baseUrl,
+      });
     } on MissingPluginException {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

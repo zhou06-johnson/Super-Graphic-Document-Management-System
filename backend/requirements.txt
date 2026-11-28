@@ -28,3 +28,6 @@ sqlmodel
 #
 # The application will automatically use the correct library based on your OS.
 # ============================================================================
+
+av
+scenedetect[opencv]

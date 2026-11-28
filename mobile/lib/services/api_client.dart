@@ -41,6 +41,29 @@ class ApiClient {
     _dio.options.baseUrl = normalized;
   }
 
+  Future<List<Map<String, dynamic>>> listLibraryVideos() async {
+    final response = await _dio.get<List<dynamic>>('/api/ai-editor/assets/videos');
+    return (response.data ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .toList();
+  }
+
+  Future<void> uploadLibraryVideo(File file, String name) async {
+    await _dio.post<String>(
+      '/api/ai-editor/assets/videos',
+      queryParameters: {'name': name},
+      data: file.openRead(),
+      options: Options(
+        contentType: 'application/octet-stream',
+        headers: {Headers.contentLengthHeader: await file.length()},
+        responseType: ResponseType.plain,
+      ),
+    );
+  }
+
+  String libraryVideoThumbnail(String id) =>
+      '$_normalizedBase/api/ai-editor/assets/$id/thumbnail';
+
   Future<String> getAmapLocationName(double lat, double lng) async {
     try {
       final response = await _dio.get(

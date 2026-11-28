@@ -22,14 +22,16 @@ import UIKit
           result(FlutterError(code: "unavailable", message: "暂时无法打开视频剪辑。", details: nil))
           return
         }
-        self.openVideoEditor(result: result)
+        let arguments = call.arguments as? [String: Any]
+        let baseURL = (arguments?["baseUrl"] as? String).flatMap { URL(string: $0) }
+        self.openVideoEditor(baseURL: baseURL, result: result)
       }
     }
     videoEditorChannel = channel
   }
 
   @MainActor
-  private func openVideoEditor(result: FlutterResult) {
+  private func openVideoEditor(baseURL: URL?, result: FlutterResult) {
     let presenter = UIApplication.shared.connectedScenes
       .compactMap { $0 as? UIWindowScene }
       .filter { $0.activationState == .foregroundActive }
@@ -41,7 +43,7 @@ import UIKit
       return
     }
 
-    let controller = UIHostingController(rootView: VideoEditorView { [weak presenter] in
+    let controller = UIHostingController(rootView: VideoEditorView(baseURL: baseURL) { [weak presenter] in
       presenter?.dismiss(animated: true)
     })
     controller.modalPresentationStyle = .fullScreen

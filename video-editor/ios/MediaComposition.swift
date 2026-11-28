@@ -24,7 +24,9 @@ struct MediaComposition {
         CMTime(seconds: seconds, preferredTimescale: 60_000)
     }
 
-    static func build(clips: [Clip], muted: Bool) async throws -> Self {
+    static func build(
+        clips: [Clip], muted: Bool, previewProxies: [URL: URL] = [:], previewCanvas: CGSize? = nil
+    ) async throws -> Self {
         let composition = AVMutableComposition()
         guard let outputVideo = composition.addMutableTrack(
             withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid
@@ -40,23 +42,26 @@ struct MediaComposition {
 
         for clip in clips {
             let asset = AVURLAsset(url: clip.url)
-            guard let video = try await asset.loadTracks(withMediaType: .video).first else {
+            let videoAsset = previewProxies[clip.url].map { AVURLAsset(url: $0) } ?? asset
+            guard let video = try await videoAsset.loadTracks(withMediaType: .video).first else {
                 throw MediaError.unreadable
             }
             let (transform, size) = try await video.load(.preferredTransform, .naturalSize)
             let bounds = CGRect(origin: .zero, size: size).applying(transform).standardized
             guard bounds.width > 0, bounds.height > 0 else { throw MediaError.cannotCompose }
             if instructions.isEmpty {
-                let scale = min(1, 1920 / max(bounds.width, bounds.height))
+                let canvas = previewCanvas ?? bounds.size
+                let longestSide: CGFloat = previewCanvas == nil ? 1920 : 1280
+                let scale = min(1, longestSide / max(canvas.width, canvas.height))
                 videoComposition.renderSize = CGSize(
-                    width: max(2, floor(bounds.width * scale / 2) * 2),
-                    height: max(2, floor(bounds.height * scale / 2) * 2)
+                    width: max(2, floor(canvas.width * scale / 2) * 2),
+                    height: max(2, floor(canvas.height * scale / 2) * 2)
                 )
             }
             let range = CMTimeRange(start: time(clip.start), end: time(clip.end))
             try outputVideo.insertTimeRange(range, of: video, at: cursor)
 
-            if let outputAudio, let audio = try await asset.loadTracks(withMediaType: .audio).first {
+            if !clip.isGenerated, let outputAudio, let audio = try await asset.loadTracks(withMediaType: .audio).first {
                 let overlap = range.intersection(try await audio.load(.timeRange))
                 if overlap.isValid && !overlap.isEmpty {
                     let audioStart = cursor + (overlap.start - range.start)
@@ -173,6 +178,63 @@ struct MediaComposition {
     }
 
     @MainActor
+    static func makePreviewProxy(for url: URL) async throws -> URL? {
+        let source = AVURLAsset(url: url)
+        guard let video = try await source.loadTracks(withMediaType: .video).first else {
+            return nil
+        }
+        let (size, transform, range) = try await video.load(.naturalSize, .preferredTransform, .timeRange)
+        let bounds = CGRect(origin: .zero, size: size).applying(transform).standardized
+        guard bounds.width > 0, bounds.height > 0, max(bounds.width, bounds.height) > 1280,
+              CMTimeCompare(range.start, .zero) == 0,
+              let session = AVAssetExportSession(asset: source, presetName: AVAssetExportPreset1280x720),
+              session.supportedFileTypes.contains(.mp4) else { return nil }
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MemoirsCore-proxy-" + UUID().uuidString)
+            .appendingPathExtension("mp4")
+        do {
+            try await writeMP4(session, to: destination)
+            try Task.checkCancellation()
+            let proxy = AVURLAsset(url: destination)
+            guard let track = try await proxy.loadTracks(withMediaType: .video).first else {
+                throw MediaError.unreadable
+            }
+            let (proxySize, proxyTransform, proxyRange) = try await track.load(.naturalSize, .preferredTransform, .timeRange)
+            let proxyBounds = CGRect(origin: .zero, size: proxySize).applying(proxyTransform).standardized
+            guard proxyBounds.width > 0, proxyBounds.height > 0,
+                  max(proxyBounds.width, proxyBounds.height) < max(bounds.width, bounds.height),
+                  abs((proxyBounds.width / proxyBounds.height) / (bounds.width / bounds.height) - 1) < 0.02 else {
+                throw MediaError.cannotCompose
+            }
+            guard CMTimeCompare(proxyRange.start, range.start) == 0,
+                  CMTimeCompare(proxyRange.end, range.end) >= 0,
+                  (proxyRange.end - range.end).seconds <= 0.05 else {
+                throw MediaError.cannotCompose
+            }
+            return destination
+        } catch {
+            try? FileManager.default.removeItem(at: destination)
+            throw error
+        }
+    }
+
+    @MainActor
+    private static func writeMP4(_ session: AVAssetExportSession, to url: URL) async throws {
+        if #available(iOS 18.0, *) {
+            try await session.export(to: url, as: .mp4)
+        } else {
+            session.outputURL = url
+            session.outputFileType = .mp4
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                session.exportAsynchronously { continuation.resume() }
+            }
+            guard session.status == .completed else {
+                throw session.error ?? MediaError.cannotExport
+            }
+        }
+    }
+
+    @MainActor
     func export(titles: [VideoTitle], duration: Double) async throws -> URL {
         guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality),
               session.supportedFileTypes.contains(.mp4) else { throw MediaError.cannotExport }
@@ -182,18 +244,7 @@ struct MediaComposition {
         session.videoComposition = compositionForExport(titles: titles, duration: duration)
         session.shouldOptimizeForNetworkUse = true
         do {
-            if #available(iOS 18.0, *) {
-                try await session.export(to: url, as: .mp4)
-            } else {
-                session.outputURL = url
-                session.outputFileType = .mp4
-                await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                    session.exportAsynchronously { continuation.resume() }
-                }
-                guard session.status == .completed else {
-                    throw session.error ?? MediaError.cannotExport
-                }
-            }
+            try await Self.writeMP4(session, to: url)
         } catch {
             try? FileManager.default.removeItem(at: url)
             throw error

@@ -31,13 +31,65 @@ class _LibraryPageState extends State<LibraryPage> {
     });
   }
 
+  Future<void> _chooseImport() async {
+    if (_uploading) return;
+    final importVideo = await showModalBottomSheet<bool>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo),
+              title: const Text('导入照片'),
+              onTap: () => Navigator.pop(sheetContext, false),
+            ),
+            ListTile(
+              leading: const Icon(Icons.videocam),
+              title: const Text('导入视频'),
+              onTap: () => Navigator.pop(sheetContext, true),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || importVideo == null) return;
+    if (importVideo) {
+      await _pickAndUploadVideo();
+    } else {
+      await _pickAndUpload();
+    }
+  }
+
+  Future<void> _pickAndUploadVideo() async {
+    final file = await ImagePicker().pickVideo(source: ImageSource.gallery);
+    if (!mounted || file == null || _uploading) return;
+    final api = context.read<ApiClient>();
+    setState(() => _uploading = true);
+    try {
+      await api.uploadLibraryVideo(File(file.path), file.name);
+      if (!mounted) return;
+      setState(() => _refreshTick++);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('视频已添加到图库，正在后台分析')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('视频导入失败：$error')),
+      );
+    } finally {
+      if (mounted) setState(() => _uploading = false);
+    }
+  }
+
   Future<void> _pickAndUpload() async {
     if (_uploading) return;
 
     final navigator = Navigator.of(context, rootNavigator: true);
     final picker = ImagePicker();
     final pickedList = await picker.pickMultiImage(imageQuality: 92);
-    if (pickedList.isEmpty) return;
+    if (!mounted || pickedList.isEmpty) return;
 
     setState(() {
       _uploading = true;
@@ -132,7 +184,7 @@ class _LibraryPageState extends State<LibraryPage> {
   Widget build(BuildContext context) {
     final tabIndicator = Theme.of(context).colorScheme.primary;
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Scaffold(
         backgroundColor: Colors.transparent,
         extendBody: true,
@@ -152,6 +204,7 @@ class _LibraryPageState extends State<LibraryPage> {
               Tab(text: '时间'),
               Tab(text: '地点'),
               Tab(text: '人物'),
+              Tab(text: '视频'),
             ],
           ),
         ),
@@ -173,13 +226,14 @@ class _LibraryPageState extends State<LibraryPage> {
                 sortMode: LibrarySortMode.people,
                 onSelectionModeChanged: _handleSelectionModeChanged,
               ),
+              _LibraryVideos(key: ValueKey(_refreshTick)),
             ],
           ),
         ),
         floatingActionButton: _inSelectionMode
             ? null
             : FloatingActionButton(
-                onPressed: _pickAndUpload,
+                onPressed: _uploading ? null : _chooseImport,
                 child: _uploading
                     ? const SizedBox(
                         width: 24,
@@ -193,3 +247,74 @@ class _LibraryPageState extends State<LibraryPage> {
   }
 }
 
+
+
+class _LibraryVideos extends StatefulWidget {
+  const _LibraryVideos({super.key});
+
+  @override
+  State<_LibraryVideos> createState() => _LibraryVideosState();
+}
+
+class _LibraryVideosState extends State<_LibraryVideos> {
+  late Future<List<Map<String, dynamic>>> _videos;
+
+  @override
+  void initState() {
+    super.initState();
+    _videos = context.read<ApiClient>().listLibraryVideos();
+  }
+
+  Future<void> _refresh() async {
+    final next = context.read<ApiClient>().listLibraryVideos();
+    setState(() => _videos = next);
+    try {
+      await next;
+    } catch (_) {
+      // FutureBuilder renders the request error.
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final api = context.watch<ApiClient>();
+    return FutureBuilder<List<Map<String, dynamic>>>(
+      future: _videos,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (snapshot.hasError) {
+          return Center(child: TextButton(onPressed: _refresh, child: const Text('加载失败，重试')));
+        }
+        final videos = snapshot.data ?? const <Map<String, dynamic>>[];
+        return RefreshIndicator(
+          onRefresh: _refresh,
+          child: ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            children: [
+              if (videos.isEmpty) const ListTile(title: Text('点击加号导入视频')),
+              for (final item in videos)
+                ListTile(
+                  leading: item['has_thumbnail'] == true
+                      ? Image.network(
+                          api.libraryVideoThumbnail(item['id'] as String),
+                          width: 56, height: 42, fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => const Icon(Icons.movie),
+                        )
+                      : const Icon(Icons.movie),
+                  title: Text(item['name']?.toString() ?? '视频'),
+                  subtitle: Text(switch (item['status']) {
+                    'analyzing' => '正在分析',
+                    'local' => '待补充 AI 标签',
+                    'ready' => ((item['labels'] as Map?)?['tags'] as List? ?? []).join(' · '),
+                    _ => '标签暂不可用',
+                  }),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
